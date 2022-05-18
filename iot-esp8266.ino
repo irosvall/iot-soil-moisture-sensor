@@ -1,10 +1,29 @@
 #include "ESP8266WiFi.h" // Enables the ESP8266 to connect to the local network (via WiFi)
+#include <InfluxDbClient.h>
+#include <InfluxDbCloud.h>
 
 #define SensorPin A0  // used for Arduino and ESP8266
 
 // WiFi
 #define WIFI_SSID ""
 #define WIFI_PASSWORD ""
+
+// InfluxDB v2 server url
+#define INFLUXDB_URL ""
+// InfluxDB v2 server or cloud API token
+#define INFLUXDB_TOKEN ""
+// InfluxDB v2 organization id
+#define INFLUXDB_ORG ""
+// InfluxDB v2 bucket name
+#define INFLUXDB_BUCKET ""
+// Set timezone string according to https://www.gnu.org/software/libc/manual/html_node/TZ-Variable.html
+#define TZ_INFO ""
+
+// InfluxDB client instance with preconfigured InfluxCloud certificate
+InfluxDBClient client(INFLUXDB_URL, INFLUXDB_ORG, INFLUXDB_BUCKET, INFLUXDB_TOKEN, InfluxDbCloud2CACert);
+
+// Data point
+Point sensor("plant");
 
 // Gathered from WifiClient example setup for ESP8266
 void connect_WIFI() {
@@ -30,15 +49,51 @@ void connect_WIFI() {
   Serial.println(WiFi.localIP());
 }
 
+void connect_influx() {
+  // Add tags
+  sensor.addTag("device", "ESP8266");
+
+  // Accurate time is necessary for certificate validation and writing in batches
+  // For the fastest time sync find NTP servers in your area: https://www.pool.ntp.org/zone/
+  // Syncing progress and the time will be printed to Serial.
+  timeSync(TZ_INFO, "pool.ntp.org", "time.nis.gov");
+
+  // Check server connection
+  if (client.validateConnection()) {
+    Serial.print("Connected to InfluxDB: ");
+    Serial.println(client.getServerUrl());
+  } else {
+    Serial.print("InfluxDB connection failed: ");
+    Serial.println(client.getLastErrorMessage());
+  }
+}
+
 void setup() { 
   Serial.begin(115200);
   connect_WIFI();
+  connect_influx();
 }
 
 void loop() {
+  // Clear fields for reusing the point. Tags will remain untouched
+  sensor.clearFields();
+
   // Read sensor value
   float sensorValue = analogRead(SensorPin);
-  Serial.println(sensorValue);
 
-  delay(10000);
+  // Store measured value into point
+  sensor.addField("moisture", sensorValue);
+
+  // Print what is is written to influx
+  Serial.print("Writing: ");
+  Serial.println(sensor.toLineProtocol());
+
+  // Write point to influx
+  if (!client.writePoint(sensor)) {
+    Serial.print("InfluxDB write failed: ");
+    Serial.println(client.getLastErrorMessage());
+  }
+
+  // Read value once every hour
+  delay(3600000);
 }
